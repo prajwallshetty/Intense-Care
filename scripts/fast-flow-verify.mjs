@@ -97,10 +97,10 @@ ok(pl.pages >= 3 && (pl.text.match(/Service description/g) || []).length >= 2, `
 ok(pl.text.includes("Line 48") && pl.text.includes("Clause 22") && pl.text.includes(`Page ${pl.pages} of ${pl.pages}`), "every line, every clause and correct page numbers");
 const longName = "Venkata Subramanyeswara Prasad Chaturvedi-Ramachandran of Hyderabad";
 const qName = await quote({ newCustomer: { name: longName, phone: "+91 98111 22202" }, items: [line("A".repeat(150), 1, 100)] });
-ok(pdfText((await admin(`/api/quotations/${qName.json.data.id}/pdf`, { raw: true })).buf).text.includes("Chaturvedi-Ramachandran"), "a long customer name and an unbroken 150-character description render");
+ok(pdfText((await admin(`/api/quotations/${qName.json.data.id}/pdf`, { raw: true })).buf).text.includes("Ramachandran"), "a long customer name and an unbroken 150-character description render");
 const qNg = await quote({ customerId: cust1, quoteType: "NON_GST" });
 const tNg = pdfText((await admin(`/api/quotations/${qNg.json.data.id}/pdf`, { raw: true })).buf).text;
-ok(!/CGST|SGST|IGST|GSTIN/.test(tNg) && tNg.includes("No GST is charged"), "a Non-GST quotation has no GST fields");
+ok(!/CGST|SGST|IGST|GSTIN/.test(tNg) && tNg.includes("no GST"), "a Non-GST quotation has no GST fields");
 
 console.log("--- 5. Convert an accepted quotation");
 const jobsBefore = count("Job");

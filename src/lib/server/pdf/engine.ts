@@ -15,8 +15,10 @@ import { amountInWords } from "@/lib/utils";
 export const INK = "#18181B";
 export const MUTED = "#6B7280";
 export const RULE = "#D4D4D8";
-export const SOFT = "#F4F4F5";
+export const SOFT = "#F8F9FB";
+export const PANEL = "#F3F4F8";
 export const ACCENT = "#BE123C"; // the app's rose, darkened for print
+export const TINT = "#FFF1F2";
 
 const PAGE = { w: 595.28, h: 841.89 };
 const M = { l: 42, r: 42, t: 40, b: 46 };
@@ -121,10 +123,11 @@ export class Pdf {
   /* ----------------------------------------------------------------- pages */
   private contentStart() { return this.y; }
 
-  /** Page 1: full letterhead. Later pages: slim running header. */
-  firstPageHeader(title: string, meta: { label: string; value: string }[]) {
+  /** Page 1: letterhead (logo left, company right), a heavy accent rule, then the title with the document number and date. */
+  firstPageHeader(title: string, right: string[], opts: { draft?: boolean } = {}) {
     this.pageNo = 1;
     this.continuedTitle = title;
+    this.draft = !!opts.draft;
     const d = this.doc;
     const logo = logoBuffer(this.company);
     const top = M.t;
@@ -132,39 +135,35 @@ export class Pdf {
     if (logo) {
       try {
         const img = (d as unknown as { openImage: (b: Buffer) => { width: number; height: number } }).openImage(logo);
-        const w = Math.min(150, (img.width / img.height) * 40);
+        const w = Math.min(160, (img.width / img.height) * 44);
         lh = w / (img.width / img.height);
         d.image(logo, M.l, top, { width: w });
-      } catch { /* unreadable logo — the name below still identifies the company */ }
+      } catch { /* unreadable logo — the name on the right still identifies the company */ }
     }
-    // company block, right aligned
-    const cw = 250;
+    const cw = 260;
     const cx = PAGE.w - M.r - cw;
     let cy = top;
     this.font(true, 12, INK);
     d.text(this.company.name || "Intense Care", cx, cy, { width: cw, align: "right" });
-    cy = d.y;
-    this.font(false, 8.5, MUTED);
-    const lines = [this.company.tagline, this.company.address, [this.company.phone, this.company.email].filter(Boolean).join("  ·  "), this.company.website, this.company.gstin ? `GSTIN ${this.company.gstin}` : ""].filter(Boolean) as string[];
+    cy = d.y + 1;
+    this.font(false, 8.2, MUTED);
+    const lines = [this.company.tagline, this.company.address, [this.company.phone, this.company.email].filter(Boolean).join("  ·  "), this.company.website, this.company.gstin ? `GSTIN: ${this.company.gstin}` : ""].filter(Boolean) as string[];
     for (const l of lines) { d.text(l, cx, cy, { width: cw, align: "right", lineGap: 1.5 }); cy = d.y; }
     this.y = Math.max(top + lh, cy) + 8;
-    d.moveTo(M.l, this.y).lineTo(PAGE.w - M.r, this.y).lineWidth(1.6).strokeColor(ACCENT).stroke();
-    this.y += 10;
-    // title + meta
-    this.font(true, 22, INK);
-    d.text(title, M.l, this.y, { width: 250, characterSpacing: 1 });
+    d.rect(M.l, this.y, CONTENT_W, 2.6).fillColor(ACCENT).fill();
+    this.y += 16;
+    this.font(true, 23, ACCENT);
+    d.text(title, M.l, this.y, { width: CONTENT_W - 190, lineGap: 0 });
     const titleBottom = d.y;
-    const mw = 250, mx = PAGE.w - M.r - mw;
-    let my = this.y + 2;
-    for (const m of meta.filter((x) => x.value)) {
-      this.font(false, 8.5, MUTED);
-      d.text(m.label, mx, my, { width: 95 });
+    let ry = this.y + 3;
+    for (const r of right.filter(Boolean)) {
       this.font(true, 9.5, INK);
-      d.text(m.value, mx + 98, my, { width: mw - 98, align: "right" });
-      my = Math.max(my + 14, d.y + 3);
+      d.text(r, PAGE.w - M.r - 190, ry, { width: 190, align: "right", lineBreak: false });
+      ry += 14;
     }
-    this.y = Math.max(titleBottom, my) + 10;
+    this.y = Math.max(titleBottom, ry) + 8;
   }
+  draft = false;
 
   newPage() {
     this.doc.addPage();
@@ -190,32 +189,74 @@ export class Pdf {
     this.y = this.doc.y + 4;
   }
 
-  /** Two side-by-side labelled blocks (e.g. Prepared for / Service address). Blank lines are never printed. */
-  twoColumn(left: { heading: string; lines: { text: string; bold?: boolean }[] } | null, right: { heading: string; lines: { text: string; bold?: boolean }[] } | null) {
-    const cw = (CONTENT_W - 24) / 2;
-    const draw = (blk: NonNullable<typeof left>, x: number, y: number) => {
-      this.font(true, 8.5, ACCENT);
-      this.doc.text(blk.heading.toUpperCase(), x, y, { width: cw, characterSpacing: 0.8 });
-      let yy = this.doc.y + 4;
-      for (const l of blk.lines) {
-        this.font(!!l.bold, l.bold ? 11 : 9.5, INK);
-        this.doc.text(l.text, x, yy, { width: cw, lineGap: 2 });
-        yy = this.doc.y + 1;
-      }
-      return yy;
-    };
-    const measure = (blk: NonNullable<typeof left>) => {
-      let hh = 16;
-      for (const l of blk.lines) { this.font(!!l.bold, l.bold ? 11 : 9.5); hh += this.h(l.text, cw) + 1; }
-      return hh;
-    };
-    const blocks = [left, right].filter((b): b is NonNullable<typeof left> => !!b && b.lines.length > 0);
-    if (!blocks.length) return;
-    this.ensure(Math.max(...blocks.map(measure)) + 6);
+  /**
+   * Shaded rounded panels. `left` is a titled block of lines (name in bold); `right` is a key/value list (document details).
+   * Blank lines and rows are never printed. The two panels share one height.
+   */
+  panels(left: { heading: string; lines: { text: string; bold?: boolean }[] } | null, right: { heading: string; rows: { label: string; value: string }[] } | null) {
+    const PAD = 12;
+    const rows = (right?.rows ?? []).filter((r) => r.value);
+    const hasL = !!left && left.lines.length > 0, hasR = !!right && rows.length > 0;
+    if (!hasL && !hasR) return;
+    const gap = 14;
+    const wl = hasL && hasR ? CONTENT_W * 0.54 : CONTENT_W;
+    const wr = hasL && hasR ? CONTENT_W - wl - gap : CONTENT_W;
+    let hl = 0, hr = 0;
+    if (hasL) { hl = 16 + 12; for (const l of left!.lines) { this.font(!!l.bold, l.bold ? 10.5 : 9.2); hl += this.h(l.text, wl - PAD * 2) + 1.5; } }
+    const vw = (hasL && hasR ? CONTENT_W - CONTENT_W * 0.54 - gap : CONTENT_W) * 0.6 - PAD;
+    const rowH = rows.map((r) => { this.font(true, 9); return Math.max(14, this.h(r.value, vw) + 3); });
+    if (hasR) { hr = 16 + 12 + rowH.reduce((a, b) => a + b, 0); }
+    const H = Math.max(hl, hr) + PAD - 2;
+    this.ensure(H + 12);
     const y0 = this.y;
-    let bottom = y0;
-    blocks.forEach((b, i) => { bottom = Math.max(bottom, draw(b, M.l + i * (cw + 24), y0)); });
-    this.y = bottom + 10;
+    const box = (x: number, w: number) => this.doc.roundedRect(x, y0, w, H, 7).fillColor(PANEL).fill();
+    if (hasL) {
+      box(M.l, wl);
+      this.font(true, 7.8, MUTED);
+      this.doc.text(left!.heading.toUpperCase(), M.l + PAD, y0 + 10, { width: wl - PAD * 2, characterSpacing: 0.7 });
+      let yy = this.doc.y + 5;
+      for (const l of left!.lines) {
+        this.font(!!l.bold, l.bold ? 10.5 : 9.2, l.bold ? INK : "#3F3F46");
+        this.doc.text(l.text, M.l + PAD, yy, { width: wl - PAD * 2, lineGap: 1.5 });
+        yy = this.doc.y + 1.5;
+      }
+    }
+    if (hasR) {
+      const x = hasL ? M.l + wl + gap : M.l;
+      box(x, wr);
+      this.font(true, 7.8, MUTED);
+      this.doc.text(right!.heading.toUpperCase(), x + PAD, y0 + 10, { width: wr - PAD * 2, characterSpacing: 0.7 });
+      let yy = y0 + 28;
+      rows.forEach((r, i) => {
+        this.font(false, 8.8, MUTED);
+        this.doc.text(r.label, x + PAD, yy, { width: wr * 0.38, lineBreak: false });
+        this.font(true, 9, INK);
+        this.doc.text(r.value, x + wr * 0.4, yy, { width: wr * 0.6 - PAD, lineGap: 1 });
+        yy += rowH[i];
+      });
+    }
+    this.y = y0 + H + 8;
+  }
+
+  /** A full-width shaded panel (e.g. service location). */
+  panel(heading: string, lines: { text: string; bold?: boolean }[]) {
+    if (!lines.length) return;
+    const PAD = 12;
+    let H = 16 + 12;
+    for (const l of lines) { this.font(!!l.bold, l.bold ? 10.5 : 9.2); H += this.h(l.text, CONTENT_W - PAD * 2) + 1.5; }
+    H += PAD - 4;
+    this.ensure(H + 12);
+    const y0 = this.y;
+    this.doc.roundedRect(M.l, y0, CONTENT_W, H, 7).fillColor(PANEL).fill();
+    this.font(true, 7.8, MUTED);
+    this.doc.text(heading.toUpperCase(), M.l + PAD, y0 + 10, { width: CONTENT_W - PAD * 2, characterSpacing: 0.7 });
+    let yy = this.doc.y + 5;
+    for (const l of lines) {
+      this.font(!!l.bold, l.bold ? 10.5 : 9.2, l.bold ? INK : "#3F3F46");
+      this.doc.text(l.text, M.l + PAD, yy, { width: CONTENT_W - PAD * 2, lineGap: 1.5 });
+      yy = this.doc.y + 1.5;
+    }
+    this.y = y0 + H + 8;
   }
 
   /** Ruled table. The header row is drawn again at the top of every continuation page. */
@@ -226,14 +267,14 @@ export class Pdf {
     const PADX = 6, PADY = 6;
     const header = () => {
       this.font(true, 8.5, "#FFFFFF");
-      this.doc.rect(M.l, this.y, CONTENT_W, 22).fillColor(INK).fill();
+      this.doc.rect(M.l, this.y, CONTENT_W, 23).fillColor(ACCENT).fill();
       cols.forEach((c, i) => {
         this.font(true, 8.5, "#FFFFFF");
-        this.doc.text(c.title, xs[i] + PADX, this.y + 7, { width: widths[i] - PADX * 2, align: c.align ?? "left", lineBreak: false });
+        this.doc.text(c.title, xs[i] + PADX, this.y + 7.5, { width: widths[i] - PADX * 2, align: c.align ?? "left", lineBreak: false });
       });
-      this.y += 22;
+      this.y += 23;
     };
-    this.ensure(22 + 40);
+    this.ensure(23 + 40);
     header();
     const prev = this.onNewPage;
     this.onNewPage = () => header();
@@ -246,47 +287,66 @@ export class Pdf {
         this.font(c.key === "desc" ? false : false, 9.5, INK);
         this.doc.text(r[c.key] ?? "", xs[i] + PADX, this.y + PADY, { width: widths[i] - PADX * 2, align: c.align ?? "left", lineGap: 2 });
       });
+      // light ledger lines: left/right edges, column separators and the row's bottom rule
+      this.doc.lineWidth(0.5).strokeColor(RULE);
+      for (const x of xs) this.doc.moveTo(x, this.y).lineTo(x, this.y + hh).stroke();
       this.y += hh;
-      this.doc.moveTo(M.l, this.y).lineTo(PAGE.w - M.r, this.y).lineWidth(0.5).strokeColor(RULE).stroke();
+      this.doc.moveTo(M.l, this.y).lineTo(PAGE.w - M.r, this.y).stroke();
     });
     this.onNewPage = prev;
     this.y += 12;
   }
 
-  /** Right-aligned label / value rows, kept together on one page. `strong` rows are drawn on a dark band. */
-  summary(rows: { label: string; value: string; strong?: boolean; muted?: boolean }[], opts: { note?: string } = {}) {
-    const w = 250, x = PAGE.w - M.r - w;
-    const need = rows.reduce((a, r) => a + (r.strong ? 28 : 17), 0) + (opts.note ? 24 : 0) + 8;
+  /** Right-aligned totals box with an accent top rule; `strong` rows sit on a tinted band. Kept together on one page. */
+  summary(rows: { label: string; value: string; strong?: boolean; muted?: boolean }[], opts: { note?: string; signature?: PdfCompany } = {}) {
+    const w = 262, x = PAGE.w - M.r - w;
+    const need = rows.reduce((a, r) => a + (r.strong ? 28 : 17), 0) + (opts.note ? 24 : 0) + 10;
     this.ensure(need);
-    for (const r of rows) {
+    const y00 = this.y;
+    if (opts.signature) this.signatureBeside(opts.signature, y00 + 6);
+    this.doc.rect(x, this.y, w, 2).fillColor(ACCENT).fill();
+    this.y += 4;
+    rows.forEach((r, i) => {
       if (r.strong) {
-        this.doc.rect(x, this.y, w, 26).fillColor(INK).fill();
-        this.font(true, 11, "#FFFFFF");
-        this.doc.text(r.label, x + 10, this.y + 8, { width: 110, lineBreak: false });
+        this.doc.rect(x, this.y, w, 26).fillColor(TINT).fill();
+        this.font(true, 11, ACCENT);
+        this.doc.text(r.label, x + 10, this.y + 8, { width: 130, lineBreak: false });
         this.doc.text(r.value, x + 100, this.y + 8, { width: w - 110, align: "right", lineBreak: false });
-        this.y += 28;
+        this.y += 27;
       } else {
-        this.font(false, 9.5, r.muted ? MUTED : INK);
-        this.doc.text(r.label, x + 10, this.y, { width: 130, lineBreak: false });
-        this.font(r.label.startsWith("Balance"), 9.5, r.muted ? MUTED : INK);
+        if (i % 2 === 1) this.doc.rect(x, this.y - 3, w, 17).fillColor(SOFT).fill();
+        this.font(false, 9.3, r.muted ? MUTED : INK);
+        this.doc.text(r.label, x + 10, this.y, { width: 140, lineBreak: false });
+        this.font(r.label.startsWith("Balance"), 9.3, r.muted ? MUTED : INK);
         this.doc.text(r.value, x + 100, this.y, { width: w - 110, align: "right", lineBreak: false });
         this.y += 17;
-        this.doc.moveTo(x, this.y - 3).lineTo(x + w, this.y - 4).lineWidth(0.4).strokeColor(RULE).stroke();
       }
-    }
+    });
     if (opts.note) {
       this.font(false, 8, MUTED);
       this.doc.text(opts.note, x, this.y + 2, { width: w, align: "right" });
       this.y = this.doc.y + 6;
     }
-    this.y += 6;
+    this.y += 4;
+  }
+
+  /** The company's signature, drawn to the left of the totals (invoices) so it never strands on its own page. */
+  private signatureBeside(c: PdfCompany, y0: number) {
+    const w = 200;
+    this.font(true, 8.5, ACCENT);
+    this.doc.text(`FOR ${(c.name || "Intense Care").toUpperCase()}`, M.l, y0, { width: w, characterSpacing: 0.8 });
+    const sig = dataUrlImage(c.signature);
+    if (sig) { try { this.doc.image(sig, M.l, y0 + 14, { fit: [140, 40] }); } catch { /* ignore */ } }
+    this.doc.moveTo(M.l, y0 + 62).lineTo(M.l + w, y0 + 62).lineWidth(0.7).strokeColor(INK).stroke();
+    this.font(false, 8.5, MUTED);
+    this.doc.text(c.signatoryName || "Authorised signatory", M.l, y0 + 66, { width: w });
   }
 
   amountWords(total: number) {
     const words = amountInWords(total);
     if (!words) return;
     this.font(false, 9, MUTED);
-    const text = `Amount in words: INR ${words} only`;
+    const text = `Amount in words: INR ${words} only. All amounts are in Indian rupees (INR).`;
     this.ensure(this.h(text, CONTENT_W) + 10);
     this.doc.text(text, M.l, this.y, { width: CONTENT_W, lineGap: 2 });
     this.y = this.doc.y + 8;
@@ -358,6 +418,14 @@ export class Pdf {
     const range = this.doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       this.doc.switchToPage(range.start + i);
+      if (this.draft) {
+        // faint diagonal DRAFT mark, centred on the page
+        this.doc.save();
+        this.doc.opacity(0.07).fillColor("#DC2626").font(this.fonts.bold).fontSize(120);
+        this.doc.rotate(-35, { origin: [PAGE.w / 2, PAGE.h / 2] });
+        this.doc.text("DRAFT", PAGE.w / 2 - 190, PAGE.h / 2 - 60, { width: 380, align: "center", lineBreak: false });
+        this.doc.restore();
+      }
       this.doc.moveTo(M.l, FOOT_Y - 8).lineTo(PAGE.w - M.r, FOOT_Y - 8).lineWidth(0.6).strokeColor(RULE).stroke();
       this.font(false, 7.5, MUTED);
       const line = [this.company.name, this.company.phone, this.company.email, this.company.website].filter(Boolean).join("   |   ");

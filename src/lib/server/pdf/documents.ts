@@ -21,17 +21,18 @@ export function pdfCompany(s: SystemSettings, opts: { gstin?: string } = {}): Pd
 
 const num = (n: number) => new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(n);
 
+const plain = (n: number) => new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.round(n * 100) / 100);
+
 function lineRows(p: Pdf, items: QuoteLine[], gst: boolean, gstRate: number) {
   const cols: Col[] = [
-    { key: "n", title: "#", w: 4, align: "center" },
-    { key: "desc", title: "Service description", w: gst ? 40 : 46 },
+    { key: "n", title: "S.N.", w: 6, align: "center" },
+    { key: "desc", title: "Service description", w: gst ? 40 : 47 },
     { key: "qty", title: "Qty", w: 8, align: "right" },
-    { key: "rate", title: "Unit price", w: 15, align: "right" },
+    { key: "rate", title: "Rate (INR)", w: 15, align: "right" },
     ...(gst ? [{ key: "gst", title: "GST", w: 7, align: "right" } as Col] : []),
-    { key: "amt", title: "Line total", w: 16, align: "right" },
+    { key: "amt", title: "Total (INR)", w: 16, align: "right" },
   ];
-  const rows = items.map((l, i) => ({ n: String(i + 1), desc: l.description, qty: num(l.quantity), rate: p.money(l.rate), gst: `${gstRate}%`, amt: p.money(l.amount) }));
-  p.table(cols, rows);
+  p.table(cols, items.map((l, i) => ({ n: String(i + 1), desc: l.description, qty: num(l.quantity), rate: plain(l.rate), gst: `${gstRate}%`, amt: plain(l.amount) })));
 }
 
 /* ------------------------------------------------------------------------------------------------ quotation */
@@ -40,26 +41,34 @@ export async function buildQuotePdf(d: Awaited<ReturnType<typeof quoteDocument>>
   const { q, customer, company } = d;
   const gst = q.quoteType !== "NON_GST";
   const p = new Pdf(pdfCompany(settings, { gstin: gst ? settings.gstin?.trim() : "" }), { title: `Quotation ${q.quoteNumber}`, subject: `Quotation for ${customer.name}` });
-  p.firstPageHeader("QUOTATION", [
-    { label: "Quotation no.", value: q.quoteNumber },
-    { label: "Issue date", value: dmy(q.createdAt) },
-    { label: "Valid until", value: dmy(q.validUntil) },
-  ]);
+  const draft = q.status === "draft";
+  p.firstPageHeader(draft ? "QUOTATION (DRAFT)" : "QUOTATION", [`Quotation No.: ${q.quoteNumber}`, `Date: ${dmy(q.createdAt)}`], { draft });
 
   const items = (Array.isArray(q.items) ? q.items : []) as unknown as QuoteLine[];
   const taxable = Math.round((q.subtotal - q.discount) * 100) / 100;
-  p.twoColumn(
+  p.panels(
     {
       heading: "Prepared for",
       lines: [
         { text: customer.name, bold: true },
-        ...(customer.phone ? [{ text: customer.phone }] : []),
+        ...(customer.address ? [{ text: customer.address }] : []),
+        ...(customer.phone ? [{ text: `Phone: ${customer.phone}` }] : []),
         ...(customer.email ? [{ text: customer.email }] : []),
         ...(gst && q.customerGstin ? [{ text: `GSTIN: ${q.customerGstin}` }] : []),
       ],
     },
-    d.serviceAddress ? { heading: "Service address", lines: [{ text: d.serviceAddress }] } : customer.address ? { heading: "Address", lines: [{ text: customer.address }] } : null
+    {
+      heading: "Quotation details",
+      rows: [
+        { label: "Currency:", value: "INR (₹)" },
+        { label: "Valid until:", value: dmy(q.validUntil) },
+        { label: "Tax:", value: gst ? `GST ${q.gstRate}%` : "Non-GST (no GST)" },
+        { label: "Supply:", value: gst ? (q.interState ? "Inter-state (IGST)" : "Intra-state") : "" },
+        { label: "Advance:", value: q.advanceAmount && q.advanceAmount > 0 ? p.money(q.advanceAmount) : "" },
+      ],
+    }
   );
+  if (d.serviceAddress) p.panel("Service location", [{ text: d.serviceAddress }]);
 
   lineRows(p, items, gst, q.gstRate);
 
@@ -73,10 +82,9 @@ export async function buildQuotePdf(d: Awaited<ReturnType<typeof quoteDocument>>
   if (q.advanceAmount && q.advanceAmount > 0) {
     rows.push({ label: "Advance requested", value: p.money(q.advanceAmount) }, { label: "Balance after advance", value: p.money(Math.max(0, q.total - q.advanceAmount)) });
   }
-  p.summary(rows, { note: gst ? "All amounts in INR (₹). GST charged as shown." : "All amounts in INR (₹). No GST is charged on this quotation." });
+  p.summary(rows);
   p.amountWords(q.total);
 
-  p.section("Service scope", items.map((l) => `${l.description}${l.quantity !== 1 ? ` × ${num(l.quantity)}` : ""}`).join("\n"), { bullets: true });
   p.section("Additional requirements", q.requirements);
   p.section("Notes", q.notes);
   p.section("Payment terms", q.paymentTerms);
@@ -102,33 +110,39 @@ export async function buildInvoicePdf(d: Awaited<ReturnType<typeof loadInvoiceDe
   const gst = inv.invoiceType === "GST";
   const supplierGstin = gst ? inv.supplierGstin || settings.gstin?.trim() || "" : "";
   const p = new Pdf(pdfCompany(settings, { gstin: supplierGstin }), { title: `${gst ? "Tax invoice" : "Invoice"} ${inv.invoiceNumber}`, subject: `Invoice for ${customer.name}` });
-  p.firstPageHeader(gst ? "TAX INVOICE" : "INVOICE", [
-    { label: "Invoice no.", value: inv.invoiceNumber },
-    { label: "Invoice date", value: dmy(inv.issuedAt) },
-    { label: "Due date", value: dmy(inv.dueDate) },
-    { label: "Job ID", value: job.jobNumber && job.jobNumber !== "—" ? job.jobNumber : "" },
-    { label: "Quotation ref.", value: d.quoteNumber ?? "" },
-    { label: "Service date", value: job.serviceDate && job.serviceDate !== "—" ? dmy(job.serviceDate) : "" },
-  ]);
-  // status badge — taken straight from the invoice's recorded status (payments are confirmed elsewhere, never here)
+  const draft = !inv.finalizedAt && inv.status === "UNPAID" && inv.amountPaid === 0;
+  const base = gst ? "TAX INVOICE" : "INVOICE";
+  p.firstPageHeader(draft ? `${base} (DRAFT)` : base, [`Invoice No.: ${inv.invoiceNumber}`, `Date: ${dmy(inv.issuedAt)}`], { draft });
+  // the status words come straight from the recorded status (payments are confirmed elsewhere, never here)
   const st = STATUS_LABEL[inv.status] ?? { text: String(inv.status), tone: "neutral" as const };
-  p.badge(st.text, 42, p.y - 6, st.tone);
-  p.y += 20;
 
   const clean = (s?: string) => (s && s !== "—" ? s : "");
-  p.twoColumn(
+  p.panels(
     {
-      heading: "Bill to",
+      heading: "Customer / Bill to",
       lines: [
         { text: customer.name, bold: true },
         ...(clean(customer.address) ? [{ text: clean(customer.address) }] : []),
-        ...(customer.phone ? [{ text: customer.phone }] : []),
+        ...(customer.phone ? [{ text: `Phone: ${customer.phone}` }] : []),
         ...(customer.email ? [{ text: customer.email }] : []),
         ...(gst ? [{ text: `GSTIN: ${customer.gstin || "Unregistered"}` }] : []),
       ],
     },
-    clean(customer.serviceAddress) ? { heading: "Service address", lines: [{ text: clean(customer.serviceAddress) }, ...(gst ? [{ text: `Supply: ${inv.interState ? "Inter-state (IGST)" : "Intra-state (CGST + SGST)"}` }] : [])] } : null
+    {
+      heading: "Invoice details",
+      rows: [
+        { label: "Currency:", value: "INR (₹)" },
+        { label: "Due date:", value: dmy(inv.dueDate) },
+        { label: "Job ID:", value: job.jobNumber && job.jobNumber !== "—" ? job.jobNumber : "" },
+        { label: "Quotation:", value: d.quoteNumber ?? "" },
+        { label: "Service date:", value: job.serviceDate && job.serviceDate !== "—" ? dmy(job.serviceDate) : "" },
+        { label: "Tax:", value: gst ? `GST ${inv.gstRate}%${inv.interState ? " (IGST)" : ""}` : "Non-GST (no GST)" },
+        { label: "SAC:", value: gst ? settings.sacCode || "" : "" },
+        { label: "Payment:", value: st.text },
+      ],
+    }
   );
+  if (clean(customer.serviceAddress)) p.panel("Service location", [{ text: clean(customer.serviceAddress) }]);
 
   const items: QuoteLine[] = inv.items?.length ? inv.items : [{ description: job.serviceName, quantity: 1, rate: inv.subtotal, amount: inv.subtotal, custom: false }];
   lineRows(p, items, gst, inv.gstRate);
@@ -143,7 +157,7 @@ export async function buildInvoicePdf(d: Awaited<ReturnType<typeof loadInvoiceDe
   }
   rows.push({ label: "Invoice total", value: p.money(inv.total), strong: true });
   rows.push({ label: "Amount paid", value: p.money(inv.amountPaid) }, { label: "Balance due", value: p.money(inv.balanceDue) });
-  p.summary(rows, { note: gst ? `All amounts in INR (₹). SAC ${settings.sacCode || "—"}.` : "All amounts in INR (₹). No GST is charged on this invoice." });
+  p.summary(rows, { signature: pdfCompany(settings) });
   p.amountWords(inv.total);
 
   if (d.upi && inv.balanceDue > 0 && !["CANCELLED", "VOID", "REFUNDED"].includes(inv.status)) {
@@ -151,6 +165,5 @@ export async function buildInvoicePdf(d: Awaited<ReturnType<typeof loadInvoiceDe
   }
   p.section("Payment terms", inv.paymentTerms);
   p.section("Notes", inv.notes);
-  p.signatures({ acceptance: false, company: pdfCompany(settings) });
   return p.finish(gst ? "This is a computer-generated tax invoice." : "This is a computer-generated invoice. No GST is charged.");
 }

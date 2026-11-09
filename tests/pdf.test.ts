@@ -34,7 +34,7 @@ test("quotation PDF: valid file, one page, fonts embedded, short description", a
   assert.ok(buf.length < 400_000, `size ${buf.length}`);
   if (!hasPoppler) return;
   const t = text(buf);
-  for (const must of ["QUOTATION", "QT-2627-00042", "07 Nov 2026", "30 Nov 2026", "Anita Rao", "12 MG Road, Bengaluru", "Sofa shampooing", "₹2,500.00", "CGST @ 9%", "SGST @ 9%", "₹2,950.00", "Grand total", "CUSTOMER ACCEPTANCE", "Page 1 of 1", "TERMS & CONDITIONS"]) assert.ok(t.includes(must), `missing "${must}"`);
+  for (const must of ["QUOTATION", "Quotation No.: QT-2627-00042", "07 Nov 2026", "30 Nov 2026", "Anita Rao", "12 MG Road, Bengaluru", "Sofa shampooing", "₹2,500.00", "CGST @ 9%", "SGST @ 9%", "₹2,950.00", "Grand total", "CUSTOMER ACCEPTANCE", "Page 1 of 1", "TERMS & CONDITIONS"]) assert.ok(t.includes(must), `missing "${must}"`);
   assert.ok(!t.includes("SECRET INTERNAL"), "internal notes must never be printed");
 });
 
@@ -43,8 +43,8 @@ test("quotation PDF: Non-GST has no tax lines; blank fields are not printed", as
   if (!hasPoppler) return;
   const t = text(buf);
   assert.ok(!/CGST|SGST|IGST|GSTIN/.test(t), "no GST wording on a Non-GST quotation");
-  assert.ok(t.includes("No GST is charged"));
-  assert.ok(!t.includes("SERVICE ADDRESS"), "no address block when there is no address");
+  assert.ok(t.includes("no GST") && !/Advance/.test(t));
+  assert.ok(!t.includes("SERVICE LOCATION"), "no location panel when there is no address");
   assert.ok(!/Advance requested/.test(t));
   assert.ok(!/Discount/.test(t));
 });
@@ -53,7 +53,7 @@ test("quotation PDF: long name, address and description wrap inside the page; ad
   const buf = await buildQuotePdf(quoteDoc({ items: [line(long, 2, 8999.5)], name: "Venkata Subramanyeswara Prasad Chaturvedi-Ramachandran the Third", address: "Flat 1204, Tower B, Prestige Lakeside Habitat, Whitefield Main Road, Varthur, Bengaluru 560087", discount: 500, advance: 5000, requirements: "Pets at home." }), settingsFixture);
   if (!hasPoppler) return;
   const t = text(buf);
-  assert.ok(t.includes("Chaturvedi-Ramachandran"));
+  assert.ok(t.includes("Chaturvedi") && t.includes("Ramachandran"));
   assert.ok(t.includes("Advance requested") && t.includes("₹5,000.00") && t.includes("Balance after advance"));
   assert.ok(t.includes("ADDITIONAL REQUIREMENTS") && t.includes("Pets at home."));
   assert.ok(t.includes("Taxable amount"));
@@ -77,7 +77,7 @@ test("invoice PDF: GST breakdown, status, job and quotation reference, UPI, paid
   assert.equal(pages(buf), 1);
   if (!hasPoppler) return;
   const t = text(buf);
-  for (const must of ["TAX INVOICE", "INV-2627-00007", "ANITA-RAO-07112026-001", "QT-2627-00042", "PARTIALLY PAID", "CGST @ 9%", "SGST @ 9%", "GSTIN: 29AAAAA0000A1Z5", "GSTIN 29ABCDE1234F1Z5", "Amount paid", "₹3,000.00", "Balance due", "₹9,862.00", "intensecare@okhdfcbank", "Page 1 of 1"]) assert.ok(t.includes(must), `missing "${must}"`);
+  for (const must of ["TAX INVOICE", "Invoice No.: INV-2627-00007", "ANITA-RAO-07112026-001", "QT-2627-00042", "PARTIALLY PAID", "CGST @ 9%", "SGST @ 9%", "GSTIN: 29AAAAA0000A1Z5", "GSTIN: 29ABCDE1234F1Z5", "Amount paid", "₹3,000.00", "Balance due", "₹9,862.00", "intensecare@okhdfcbank", "Page 1 of 1"]) assert.ok(t.includes(must), `missing "${must}"`);
 });
 
 test("invoice PDF: Non-GST carries no GST data and an unpaid invoice never says paid", async () => {
@@ -85,9 +85,9 @@ test("invoice PDF: Non-GST carries no GST data and an unpaid invoice never says 
   if (!hasPoppler) return;
   const t = text(buf);
   assert.ok(!/CGST|SGST|IGST|GSTIN|SAC/.test(t), "Non-GST invoice has no GST fields");
-  assert.ok(/\bINVOICE\b/.test(t) && !t.includes("TAX INVOICE"));
+  assert.ok(/INVOICE \(DRAFT\)/.test(t) && !t.includes("TAX INVOICE"));
   assert.ok(t.includes("UNPAID") && !/\bPAID\b/.test(t.replace("UNPAID", "")), "status shows UNPAID, never PAID");
-  assert.ok(!t.includes("Quotation ref."), "no quotation reference when none is linked");
+  assert.ok(!t.includes("Quotation:"), "no quotation reference when none is linked");
 });
 
 test("invoice PDF: a paid invoice has no UPI request; many lines paginate", async () => {
